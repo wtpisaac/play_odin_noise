@@ -4,6 +4,8 @@ import "core:fmt"
 import "core:math/rand"
 import "core:mem"
 import "core:time"
+import "core:thread"
+import "core:slice"
 
 import "vendor:sdl3"
 
@@ -41,6 +43,7 @@ main :: proc() {
 
     WINDOW_WIDTH  :: 1920
     WINDOW_HEIGHT :: 1080
+    WINDOW_PIXELS_FLAT_COUNT :: WINDOW_WIDTH * WINDOW_HEIGHT * 4 /* RGBA */
     ok := sdl3.Init(sdl3.InitFlags {
         .VIDEO
     })
@@ -80,21 +83,18 @@ main :: proc() {
         sdl3.RenderClear(renderer)
 
         // Write pixels to surface
-        for x in 0..<WINDOW_WIDTH {
-            for y in 0..<WINDOW_HEIGHT {
-                random_grayscale_val := u8(rand.int_max(255))
-
-                sdl3.WriteSurfacePixel(
-                    surface,
-                    i32(x),
-                    i32(y),
-                    random_grayscale_val,
-                    random_grayscale_val,
-                    random_grayscale_val,
-                    255
-                )
-            }
+        sdl3.UnlockSurface(surface)
+        surface_pixels_slice := slice.bytes_from_ptr(
+            surface.pixels, 
+            WINDOW_PIXELS_FLAT_COUNT
+        )
+        for p := 0; p<WINDOW_PIXELS_FLAT_COUNT; p += 4 {
+            surface_pixels_slice[p] = 0
+            surface_pixels_slice[p+1] = 255
+            surface_pixels_slice[p+2] = 0
+            surface_pixels_slice[p+3] = 255
         }
+        sdl3.LockSurface(surface)
 
         texture := sdl3.CreateTextureFromSurface(
             renderer,
