@@ -1,0 +1,5 @@
+start := time.tick_now()
+log_now :: proc() {
+    now := time.tick_now()
+    fmt.printfln("%v", time.duration_milliseconds(time.tick_diff(start, now)))
+}

@@ -15,6 +15,12 @@ WINDOW_PIXELS_FLAT_COUNT :: WINDOW_WIDTH * WINDOW_HEIGHT * 4 /* RGBA */
 GENERATION_THREAD_COUNT :: 8
 GENERATION_THREAD_SLICE_SIZE :: WINDOW_PIXELS_FLAT_COUNT / GENERATION_THREAD_COUNT;
 
+start := time.tick_now()
+log_now :: proc() {
+    now := time.tick_now()
+    fmt.printfln("%v", time.duration_milliseconds(time.tick_diff(start, now)))
+}
+
 should_close_window :: proc
 (
     event: sdl3.Event,
@@ -97,7 +103,7 @@ main :: proc() {
     thread.pool_init(
         &pool,
         context.temp_allocator,
-        GENERATION_THREAD_COUNT
+        8
     )
     thread.pool_start(&pool)
 
@@ -120,8 +126,11 @@ main :: proc() {
         )
 
         // Spawn threads
+        fmt.println("START THREADS")
+        log_now()
         task_data_arr := [GENERATION_THREAD_COUNT]GenerationTaskData {};
         for i in 0..<GENERATION_THREAD_COUNT {
+            // if i != 1 {continue}
             task_data_arr[i] = GenerationTaskData {
                 pixels = surface_pixels_slice[GENERATION_THREAD_SLICE_SIZE*i : 
                                               GENERATION_THREAD_SLICE_SIZE*(i + 1)]
@@ -135,6 +144,8 @@ main :: proc() {
             )
         }
         thread.pool_finish(&pool)
+        fmt.println("END THREADS")
+        log_now()
 
         texture := sdl3.CreateTextureFromSurface(
             renderer,
@@ -147,6 +158,9 @@ main :: proc() {
             nil
         )
         sdl3.RenderPresent(renderer)
+        fmt.println("END RENDER")
+        log_now()
+        fmt.println("STOP TRACK")
         sdl3.DestroyTexture(texture)
 
         event: sdl3.Event
