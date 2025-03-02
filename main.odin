@@ -9,6 +9,12 @@ import "core:slice"
 
 import "vendor:sdl3"
 
+WINDOW_WIDTH  :: 1920
+WINDOW_HEIGHT :: 1080
+WINDOW_PIXELS_FLAT_COUNT :: WINDOW_WIDTH * WINDOW_HEIGHT * 4 /* RGBA */
+GENERATION_THREAD_COUNT :: 8
+GENERATION_THREAD_SLICE_SIZE :: WINDOW_PIXELS_FLAT_COUNT / GENERATION_THREAD_COUNT;
+
 should_close_window :: proc
 (
     event: sdl3.Event,
@@ -18,6 +24,26 @@ should_close_window :: proc
     // Window close
     return event.type == .WINDOW_CLOSE_REQUESTED &&
            event.window.windowID == targeted_window_id
+}
+
+GenerationTaskData :: struct {
+    pixels: []u8
+}
+
+random_pixel_generation_task_proc :: proc(
+    task: thread.Task
+) {
+    task_data := (^GenerationTaskData)(task.data)
+    pixels := task_data.pixels
+
+    for p := 0; p < slice.length(task_data.pixels); p += 4 {
+        rand_color_val := u8(rand.int_max(255))
+
+        pixels[p] = rand_color_val
+        pixels[p+1] = rand_color_val
+        pixels[p+2] = rand_color_val
+        pixels[p+3] = 255
+    }
 }
 
 main :: proc() {
@@ -41,9 +67,6 @@ main :: proc() {
         mem.tracking_allocator_destroy(&track)
     }
 
-    WINDOW_WIDTH  :: 1920
-    WINDOW_HEIGHT :: 1080
-    WINDOW_PIXELS_FLAT_COUNT :: WINDOW_WIDTH * WINDOW_HEIGHT * 4 /* RGBA */
     ok := sdl3.Init(sdl3.InitFlags {
         .VIDEO
     })
@@ -68,8 +91,16 @@ main :: proc() {
     format := sdl3.GetPixelFormatDetails(sdl3.PixelFormat.RGBA32)
 
     last_tick := time.tick_now()
+    // cycle: u8 = 0
 
-    cycle: u8 = 0
+    pool: thread.Pool
+    thread.pool_init(
+        &pool,
+        context.temp_allocator,
+        GENERATION_THREAD_COUNT
+    )
+    thread.pool_start(&pool)
+
     for {
         cycle_dir := true
 
@@ -83,18 +114,27 @@ main :: proc() {
         sdl3.RenderClear(renderer)
 
         // Write pixels to surface
-        sdl3.UnlockSurface(surface)
         surface_pixels_slice := slice.bytes_from_ptr(
             surface.pixels, 
             WINDOW_PIXELS_FLAT_COUNT
         )
-        for p := 0; p<WINDOW_PIXELS_FLAT_COUNT; p += 4 {
-            surface_pixels_slice[p] = 0
-            surface_pixels_slice[p+1] = 255
-            surface_pixels_slice[p+2] = 0
-            surface_pixels_slice[p+3] = 255
+
+        // Spawn threads
+        task_data_arr := [GENERATION_THREAD_COUNT]GenerationTaskData {};
+        for i in 0..<GENERATION_THREAD_COUNT {
+            task_data_arr[i] = GenerationTaskData {
+                pixels = surface_pixels_slice[GENERATION_THREAD_SLICE_SIZE*i : 
+                                              GENERATION_THREAD_SLICE_SIZE*(i + 1)]
+            }
+
+            thread.pool_add_task(
+                &pool,
+                mem.panic_allocator(),
+                random_pixel_generation_task_proc,
+                &task_data_arr[i],
+            )
         }
-        sdl3.LockSurface(surface)
+        thread.pool_finish(&pool)
 
         texture := sdl3.CreateTextureFromSurface(
             renderer,
@@ -108,25 +148,6 @@ main :: proc() {
         )
         sdl3.RenderPresent(renderer)
         sdl3.DestroyTexture(texture)
-
-        if cycle_dir {
-            cycle = cycle + 1
-        } else {
-            cycle = cycle - 1
-        }
-        switch cycle_dir {
-            case true:
-                if cycle > 255 {
-                    cycle = 254
-                    cycle_dir = false
-                }
-            case false:
-                if cycle == 0 {
-                    cycle = 0
-                    cycle_dir = true
-                }
-        }
-        // fmt.printfln("%v", cycle)
 
         event: sdl3.Event
         exists := sdl3.PollEvent(&event)
@@ -143,6 +164,8 @@ main :: proc() {
         new_title := fmt.ctprintf("%s [%f FPS]", "Hello", fps)
         sdl3.SetWindowTitle(window, new_title)
         delete_cstring(new_title, context.temp_allocator)
+
+        // free_all(context.temp_allocator)
     }
 
     sdl3.DestroyRenderer(renderer)
