@@ -10,11 +10,7 @@ import "core:sync"
 
 import "vendor:sdl3"
 
-WINDOW_WIDTH  :: 2560
-WINDOW_HEIGHT :: 1440
-WINDOW_PIXELS_FLAT_COUNT :: WINDOW_WIDTH * WINDOW_HEIGHT * 4 /* RGBA */
 GENERATION_THREAD_COUNT :: 8
-GENERATION_THREAD_SLICE_SIZE :: WINDOW_PIXELS_FLAT_COUNT / GENERATION_THREAD_COUNT;
 
 start := time.tick_now()
 log_now :: proc() {
@@ -29,8 +25,9 @@ should_close_window :: proc
 ) -> bool
 {
     // Window close
-    return event.type == .WINDOW_CLOSE_REQUESTED &&
-           event.window.windowID == targeted_window_id
+    return (event.type == .WINDOW_CLOSE_REQUESTED &&
+           event.window.windowID == targeted_window_id) ||
+           (event.type == .KEY_DOWN && event.key.key == sdl3.K_Q)
 }
 
 GenerationTaskData :: struct {
@@ -57,6 +54,11 @@ random_pixel_generation_task_proc :: proc(
             pixels[p+1] = rand_color_val
             pixels[p+2] = rand_color_val
             pixels[p+3] = 255
+    
+            // pixels[p] = u8(rand.int_max(255, rand_gen))
+            // pixels[p+1] = u8(rand.int_max(255, rand_gen))
+            // pixels[p+2] = u8(rand.int_max(255, rand_gen))
+            // pixels[p+3] = 255
         }
 
         sync.sema_post(task_data.end_sema)
@@ -91,18 +93,29 @@ main :: proc() {
 
     window: ^sdl3.Window
     renderer: ^sdl3.Renderer
+    
+    display_id := sdl3.GetPrimaryDisplay()
+    size := sdl3.Rect {}
+    sdl3.GetDisplayUsableBounds(display_id, &size)
+
+    WINDOW_WIDTH  := int(size.w)
+    WINDOW_HEIGHT := int(size.h)
+    WINDOW_PIXELS_FLAT_COUNT := WINDOW_WIDTH * WINDOW_HEIGHT * 4 /* RGBA */
+    GENERATION_THREAD_SLICE_SIZE := WINDOW_PIXELS_FLAT_COUNT / GENERATION_THREAD_COUNT;
+
+
     sdl3.CreateWindowAndRenderer(
         "Hello", 
-        WINDOW_WIDTH, 
-        WINDOW_HEIGHT, 
-        sdl3.WindowFlags {},
+        i32(WINDOW_WIDTH), 
+        i32(WINDOW_HEIGHT), 
+        sdl3.WINDOW_FULLSCREEN,
         &window, 
         &renderer
     )
 
     surface := sdl3.CreateSurface(
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT, 
+        i32(WINDOW_WIDTH),
+        i32(WINDOW_HEIGHT), 
         sdl3.PixelFormat.RGBA32
     )
     format := sdl3.GetPixelFormatDetails(sdl3.PixelFormat.RGBA32)
