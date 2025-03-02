@@ -6,11 +6,12 @@ import "core:mem"
 import "core:time"
 import "core:thread"
 import "core:slice"
+import "core:sync"
 
 import "vendor:sdl3"
 
-WINDOW_WIDTH  :: 1920
-WINDOW_HEIGHT :: 1080
+WINDOW_WIDTH  :: 2560
+WINDOW_HEIGHT :: 1440
 WINDOW_PIXELS_FLAT_COUNT :: WINDOW_WIDTH * WINDOW_HEIGHT * 4 /* RGBA */
 GENERATION_THREAD_COUNT :: 8
 GENERATION_THREAD_SLICE_SIZE :: WINDOW_PIXELS_FLAT_COUNT / GENERATION_THREAD_COUNT;
@@ -33,7 +34,9 @@ should_close_window :: proc
 }
 
 GenerationTaskData :: struct {
-    pixels: []u8
+    pixels: []u8,
+    start_sema: ^sync.Sema,
+    end_sema: ^sync.Sema
 }
 
 random_pixel_generation_task_proc :: proc(
@@ -42,13 +45,21 @@ random_pixel_generation_task_proc :: proc(
     task_data := (^GenerationTaskData)(task.data)
     pixels := task_data.pixels
 
-    for p := 0; p < slice.length(task_data.pixels); p += 4 {
-        rand_color_val := u8(rand.int_max(255))
+    rand_gen := rand.default_random_generator()
 
-        pixels[p] = rand_color_val
-        pixels[p+1] = rand_color_val
-        pixels[p+2] = rand_color_val
-        pixels[p+3] = 255
+    for {
+        sync.sema_wait(task_data.start_sema)
+
+        for p := 0; p < slice.length(task_data.pixels); p += 4 {
+            rand_color_val: u8 = u8(rand.int_max(255, rand_gen))
+    
+            pixels[p] = rand_color_val
+            pixels[p+1] = rand_color_val
+            pixels[p+2] = rand_color_val
+            pixels[p+3] = 255
+        }
+
+        sync.sema_post(task_data.end_sema)
     }
 }
 
@@ -107,6 +118,31 @@ main :: proc() {
     )
     thread.pool_start(&pool)
 
+    // Write pixels to surface
+    surface_pixels_slice := slice.bytes_from_ptr(
+        surface.pixels, 
+        WINDOW_PIXELS_FLAT_COUNT
+    )
+    task_data_arr := [GENERATION_THREAD_COUNT]GenerationTaskData {};
+    start_sema: [GENERATION_THREAD_COUNT]sync.Sema = {};
+    finished_sema: [GENERATION_THREAD_COUNT]sync.Sema = {};
+    for i in 0..<GENERATION_THREAD_COUNT {
+        // if i != 1 {continue}
+        task_data_arr[i] = GenerationTaskData {
+            pixels = surface_pixels_slice[GENERATION_THREAD_SLICE_SIZE*i : 
+                                          GENERATION_THREAD_SLICE_SIZE*(i + 1)],
+            start_sema = &start_sema[i],
+            end_sema = &finished_sema[i]
+        }
+
+        thread.pool_add_task(
+            &pool,
+            mem.panic_allocator(),
+            random_pixel_generation_task_proc,
+            &task_data_arr[i],
+        )
+    }
+
     for {
         cycle_dir := true
 
@@ -119,34 +155,13 @@ main :: proc() {
         )
         sdl3.RenderClear(renderer)
 
-        // Write pixels to surface
-        surface_pixels_slice := slice.bytes_from_ptr(
-            surface.pixels, 
-            WINDOW_PIXELS_FLAT_COUNT
-        )
-
-        // Spawn threads
-        fmt.println("START THREADS")
-        log_now()
-        task_data_arr := [GENERATION_THREAD_COUNT]GenerationTaskData {};
         for i in 0..<GENERATION_THREAD_COUNT {
-            // if i != 1 {continue}
-            task_data_arr[i] = GenerationTaskData {
-                pixels = surface_pixels_slice[GENERATION_THREAD_SLICE_SIZE*i : 
-                                              GENERATION_THREAD_SLICE_SIZE*(i + 1)]
-            }
-
-            thread.pool_add_task(
-                &pool,
-                mem.panic_allocator(),
-                random_pixel_generation_task_proc,
-                &task_data_arr[i],
-            )
+            sync.sema_post(&start_sema[i])
         }
-        thread.pool_finish(&pool)
-        fmt.println("END THREADS")
-        log_now()
-
+        for i in 0..<GENERATION_THREAD_COUNT {
+            sync.sema_wait(&finished_sema[i])
+        }
+       
         texture := sdl3.CreateTextureFromSurface(
             renderer,
             surface
@@ -158,9 +173,9 @@ main :: proc() {
             nil
         )
         sdl3.RenderPresent(renderer)
-        fmt.println("END RENDER")
-        log_now()
-        fmt.println("STOP TRACK")
+        // fmt.println("END RENDER")
+        // log_now()
+        // fmt.println("STOP TRACK")
         sdl3.DestroyTexture(texture)
 
         event: sdl3.Event
