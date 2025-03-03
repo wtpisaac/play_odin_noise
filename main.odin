@@ -2,6 +2,7 @@ package hellope
 
 import "core:fmt"
 import "core:math/rand"
+import "core:math"
 import "core:mem"
 import "core:time"
 import "core:thread"
@@ -9,6 +10,43 @@ import "core:slice"
 import "core:sync"
 
 import "vendor:sdl3"
+
+SMOOTHING :: 0.8
+
+TARGET_FRAME_TIME: f64 : 12.0
+TARGET_FRAME_LATENCY :: 1000.0 / TARGET_FRAME_TIME
+// TARGET_FRAME_CAP: f64 : 1
+// TARGET_FRAME_CAP_LATENCY: f64 = 1.0 / TARGET_FRAME_CAP
+
+ExponentialDeltaTime :: struct {
+    last_tick: Maybe(time.Tick),
+    ewma_val_millis: Maybe(f64)
+}
+
+exponentialdt_record_tick :: proc(
+    dt: ^ExponentialDeltaTime
+) {
+    prior_tick := dt.last_tick
+    dt.last_tick = time.tick_now()
+
+    if prior_tick == nil { return }
+
+    diff_duration := time.tick_diff(prior_tick.?, dt.last_tick.?)
+    diff_millis := time.duration_milliseconds(diff_duration)
+
+    time_f, ok := dt.ewma_val_millis.?
+    if !ok {
+        dt.ewma_val_millis = diff_millis
+    }
+
+    dt.ewma_val_millis = (SMOOTHING * diff_millis) + ((1.0 - SMOOTHING) * dt.ewma_val_millis.?)
+}
+
+exponentialdt_peek :: proc(
+    dt: ^ExponentialDeltaTime
+) -> Maybe(f64) {
+    return dt.ewma_val_millis
+}
 
 GENERATION_THREAD_COUNT :: 8
 
@@ -108,7 +146,7 @@ main :: proc() {
         "Hello", 
         i32(WINDOW_WIDTH), 
         i32(WINDOW_HEIGHT), 
-        sdl3.WINDOW_FULLSCREEN,
+        sdl3.WINDOW_BORDERLESS,
         &window, 
         &renderer
     )
@@ -156,6 +194,8 @@ main :: proc() {
         )
     }
 
+    dt := ExponentialDeltaTime {}
+
     for {
         cycle_dir := true
 
@@ -197,15 +237,32 @@ main :: proc() {
             if should_close_window(event, sdl3.GetWindowID(window)) { break }
         }
 
-        // update tick
         new_tick := time.tick_now()
         duration := time.tick_diff(last_tick, new_tick)
         last_tick = new_tick
+
+        // update tick
+        exponentialdt_record_tick(&dt)
+        dt, ok := exponentialdt_peek(&dt).?
+        assumed_delta := ok ? dt : 33.3
         
         fps := 1.0 / time.duration_seconds(duration)
         new_title := fmt.ctprintf("%s [%f FPS]", "Hello", fps)
         sdl3.SetWindowTitle(window, new_title)
         delete_cstring(new_title, context.temp_allocator)
+
+        wait_for := (u32)(math.round_f64(
+            clamp(
+                TARGET_FRAME_LATENCY - assumed_delta,
+                0.0,
+                1000.0
+            )
+        ))
+        fmt.printfln("%v %v", assumed_delta, wait_for)
+
+        sdl3.Delay(
+            wait_for
+        )
 
         // free_all(context.temp_allocator)
     }
